@@ -1,0 +1,483 @@
+{$DEFINE SMART}
+{$i srl/srl.simba}
+{$i ObjectDTM\ObjDTMInclude.simba}
+
+const
+(***********************************************)
+(* Debug Levels:                               *)
+(*  0: Mandatory Info                          *)
+(*  1: Basic Output(User Info)                 *)
+(*  2: Extended Output(User Info)              *)
+(*  3: Basic Flow(functions)                   *)
+(*  4: Extended Flow(loops, if statements, etc *)
+(*  5: Variable Values                         *)
+(***********************************************)
+  DEBUG_LEVEL = 5;
+
+//____________________________________________//
+//STOP - Do not edit anything else here//
+
+//Logs
+  NORMAL_LOG = 0;
+  OAK_LOG = 1;
+  WILLOW_LOG = 2;
+  MAPLE_LOG = 3;
+  YEW_LOG = 4;
+  MAGIC_LOG = 5;
+//Unsrung LongBows
+  NORMAL_UL = 6;
+  OAK_UL = 7;
+  WILLOW_UL = 8;
+  MAPLE_UL = 9;
+  YEW_UL = 10;
+  MAGIC_UL = 11;
+//Unstrung Shortbows
+  NORMAL_US = 12;
+  OAK_US = 13;
+  WILLOW_US = 14;
+  MAPLE_US = 15;
+  YEW_US = 16;
+  MAGIC_US = 17;
+//Fletch Types
+  NORMAL = 18;
+  OAK = 19;
+  WILLOW = 20;
+  MAPLE = 21;
+  YEW = 22;
+  MAGIC = 23;
+//Fletch Modes
+  CUT_BOWS = 24;
+  STRING_BOWS = 25;
+  CUT_AND_STRING_BOWS = 26;
+//Bow Types
+  SIZE_LONG = 27;
+  SIZE_SHORT = 28;
+
+var
+  DebugLevel : Integer;
+  BankPoint : TPoint;
+
+procedure DeclarePlayers;
+begin
+  HowManyPlayers := 1
+  NumberOfPlayers(HowManyPlayers);
+  CurrentPlayer := 0;
+  with Players[0] do
+  begin
+    Name := '';
+    Pass := '';
+    Pin := '3240';
+    Active := true;
+    Member := true;
+
+    Integers[0] := MAPLE; //Log type: NORMAL,OAK,WILLOW,MAPLE,etc
+    Integers[1] := STRING_BOWS; //Action: CUT_BOWS,STRING_BOWS,CUT_AND_STRING_BOWS
+    Integers[2] := SIZE_LONG; //for making longbow, SIZE_LONG, else SIZE_SHORT
+  end;
+end;
+
+function replicate(str : String; count : Integer):String;
+var
+  I : Integer;
+begin
+  Result := '';//make sure result is empty if function was previously called;
+  for I := 0 to count-1 do
+    Result := Result + str;
+end;
+
+procedure DebugStr(Level : Integer; Text : String);
+begin
+  if (DebugLevel >= Level) then
+    writeln(Replicate(':: ',Level) + Text);
+end;
+
+function GetFletchMode : Integer;
+begin
+  Result := Players[CurrentPlayer].Integers[1];
+end;
+
+function GetWoodType : Integer;
+begin
+  Result := Players[CurrentPlayer].Integers[0];
+end;
+
+function GetSize : Integer;
+begin
+  Result := Players[CurrentPlayer].Integers[2];
+end;
+
+function GetDTM(TargetObject : Integer) : Integer;
+begin
+  case TargetObject of
+    MAPLE : Result := DTMFromString('mlwAAAHicY2dgYLBmZmAwZobQZkDsCcTOUJzHyMB' +
+                                    'QBsRVQFwDxKWMELFyIA614GEoCVIBmsCEgVmBJC7' +
+                                    'MiAdDAQDaewa9');
+    MAPLE_US : Result := DTMFromString('mlwAAAHicY2dgYBBgZGBgAWJOIBYCYgkglgJi' +
+                                       'USDOB8qXAHEBEOcAcRYQpwNxJhCXZqYCSSYcG' +
+                                       'DdgxIOhAAD6IQTU');
+    MAPLE_UL : Result := DTMFromString('mbQAAAHicY2VgYChkZGDIA+JMIC4G4goQHyie' +
+                                       'CcQZQFwKxJVAXJyeDCSZ0DAmYMSCwQAA0dIFtQ==');
+  else
+    begin
+      ShowMessage('You passed an invalid parameter to ''GetDTM''');
+      DebugStr(1,'Invalid Parameter in ''GetDTM''');
+      TerminateScript;
+    end;
+  end;
+end;
+
+function MenuOpen(MouseAway : Boolean) : Boolean;
+var
+  MenuBMP,a,b,TempSpeed : Integer;
+begin
+  Result := False;
+  TempSpeed := MouseSpeed;
+  MouseSpeed := RandomRange(23,32);
+
+  DebugStr(3,'In Func: MenuOpen');
+  DebugStr(2,'Checking whether menu is open...');
+  MenuBMP := BitmapFromString(4, 3, 'meJxbtmzZnz9//oHBHzBgZmEBIiDD' +
+                                    'zMyMS1AIiADthRTJ');
+  result := FindBitmap(MenuBMP,a,b);
+  DebugStr(5,'Val- Result(MenuOpen): ' + BoolToStr(Result));
+  if MouseAway then
+    MMouse(a-RandomRange(50,100),b-RandomRange(50,100),0,0);
+
+  MouseSpeed := TempSpeed;
+  FreeBitmap(MenuBMP);
+end;
+
+function BankLoaded : Boolean;
+begin
+  writeln(countColor(srl_outline_black,28,89,598,429));
+  Result := countColor(srl_outline_black,28,89,598,429) > 100;
+end;
+
+function PinAndBankTest:Boolean;
+var
+  T,Limit : LongInt;
+
+begin
+  Result := False;
+  DebugStr(3,'In Func: PinAndBankTest');
+  if not LoggedIn then
+    Exit;
+  DebugStr(2,'Waiting for bank and pin screens...');
+  Limit := RandomRange(13000,17000);
+  MarkTime(T);
+  repeat
+    wait(50+Random(150));
+  until BankScreen or PinScreen or (TimeFromMark(T) > Limit);
+  if PinScreen then
+  begin
+    DebugStr(2,'Entering pin...');
+    if Length(Players[CurrentPlayer].Pin) = 0 then
+    begin
+      DebugStr(1,'You did not set a pin, but we are in the pin screen... ' +
+               'Next player...');
+      Logout;
+      NextPlayer(False);
+      Exit;
+    end;
+    inpin(Players[CurrentPlayer].Pin);
+  end;
+  DebugStr(2,'Waiting for bank screen...');
+  MarkTime(T);
+  while not BankScreen and (TimeFromMark(T) < 5000) do
+    wait(50+random(50));
+  wait(RandomRange(600,1200));
+  Result := BankScreen;
+  if Result then
+  begin
+    DebugStr(2,'Bank opened succesfully');
+    Limit := RandomRange(3000,3500);
+    MarkTime(T);
+    repeat
+      wait(RandomRange(150,300));
+    until BankLoaded or (TimeFromMark(T) > Limit);
+    FixBank;
+  end else
+    DebugStr(2,'Did not find Bank Screen');
+end;
+
+procedure AntiBan;
+begin
+  DebugStr(3,'In Func: AntiBan');
+  DebugStr(2,'Searching for randoms...');
+  FindNormalRandoms;
+  if FindMod then
+  begin
+    DebugStr(1,'Found a mod! Logging out to grab a drink and calm down...');
+    logout;
+    wait(20000+random(5000)); //Make it seem like we had to walk away...
+    SelectWorld(RandomWorld(true,false));
+    LogInPlayer;
+  end;
+  DebugStr(4,'Might do antiban...');
+  case random(750) of //TODO maybe raise it?
+    1..5:     begin
+                DebugStr(3,'Performing PickUpMouse...');
+                PickUpMouse;
+              end;
+    6..30:    begin
+                DebugStr(3,'Performing RandomRClick...');
+                RandomRClick;
+              end;
+    31..175:  begin
+                DebugStr(3,'Performing HoverSkill...');
+                HoverSkill(SKILL_MAGIC,false);
+              end;
+    175..350: begin
+                DebugStr(3,'Performing SetScreenMouse...');
+                SetScreenMouse('rand',SRL_ANGLE_HIGH);
+              end;
+  end;
+end;
+
+function MenuCheck(TP : TPoint; XRan,YRan : Integer; text : TStringArray; Choose : Boolean) : Boolean;
+var
+  Limit : Integer;
+  T : LongInt;
+begin
+  Result := False;
+  DebugStr(3,'In Func: MenuCheck');
+  DebugStr(5,'Val- Choose: ' + BoolToStr(Choose));
+  MMouse(TP.x,TP.y,XRan,YRan);
+  wait(RandomRange(300,500));
+  ClickMouse2(mouse_Right);
+  Limit := RandomRange(3000,4500);
+  MarkTime(T);
+  repeat
+    wait(RandomRange(150,300));
+  until MenuOpen(False) or (TimeFromMark(T) > Limit);
+  if Choose then
+    Result := ChooseOptionMulti(text)
+  else
+    Result := OptionsExist(text,False);
+  if not Choose and not Result then
+    MenuOpen(True);
+end;
+
+function removeFromIntArray(arr : TIntegerArray; toDelete : Integer) : TIntegerArray;
+var
+  newArr: TIntegerArray;
+  i:Integer;
+  found : Boolean;
+begin
+  SetArrayLength(newArr,length(arr)-1);
+  for i := 0 to length(newarr)-1 do
+  begin
+    if not found then
+      found := i = toDelete;
+    if (found) then
+      newArr[i] := arr[i+1]
+    else
+      newArr[i] := arr[i];
+  end;
+  result := newArr;
+end;
+
+function FindBank_SW(Open : Boolean) : TPoint;
+var
+  TempCTS,I : Integer;
+  TempCTSMods : TExtendedArray;
+  TP : TPoint;
+  ChestTPA : TPointArray;
+  ChestATPA : T2DPointArray;
+begin
+  Result := Point(-1,-1);
+  DebugStr(3,'In Func: FindBank_SW');
+  DebugStr(5,'Val- Open: ' + BoolToStr(Open));
+  DebugStr(1,'Searching for the SoulWars BankChest');
+
+  SetArrayLength(TempCTSMods,2);
+  TempCTS := GetColorToleranceSpeed;
+  GetColorspeed2Modifiers(TempCTSMods[0],TempCTSMods[1]);
+  SetColorToleranceSpeed(2);
+  SetColorspeed2Modifiers(0,0.05);
+
+  FindColorsTolerance(ChestTPA,5855581,MSX1,MSY1,MSX2,MSY2,1);
+  ChestATPA := FloodFillTPA(ChestTPA);
+  SortATPASize(ChestATPA,True);
+  DebugStr(5,'Length- ChestTPA: ' + IntToStr(Length(ChestTPA)));
+  DebugStr(5,'Length- ChestATPA: ' + IntToStr(Length(ChestATPA)));
+  if Length(ChestATPA) = 0 then
+  begin
+    DebugStr(2,'Did not find Soul Wars Bank Chest colors');
+  end else
+  begin
+    DebugStr(4,'Looping through chest array...');
+    for I := 0 to Length(ChestATPA)-1 do
+    begin
+      DebugStr(4,'Testing ChestTPA ' + IntToStr(I));
+      DebugStr(5,'Length- ChestATPA[' + IntToStr(I) + ']: ' + IntToStr(Length(ChestATPA[I])));
+      if Length(ChestATPA[I]) < 15 then
+      begin
+        DebugStr(4,'ChestATPA too small...');
+        Break;
+      end;
+      TP := MiddleTPA(ChestATPA[I]);
+      if MenuCheck(TP,7,5,['est >', 'se Ban'],Open) then
+      begin
+        DebugStr(5,'Val- Result(FindBank_SW): ' + ToStr(TP));
+        Result := TP;
+        DebugStr(4,'ChestTPA ' + IntToStr(I) + ' contained the chest');
+        Break;
+      end;
+    end;
+  end;
+
+  if (Result.x < 0) and (Result.y < 0) then
+    Debugstr(5,'Val- Result(FindBank_SW): BankNotFound');
+
+  SetColorToleranceSpeed(TempCTS);
+  SetColorspeed2Modifiers(TempCTSMods[0],TempCTSMods[1]);
+end;
+
+function OpenBank_SW : Boolean;
+begin
+  Result := False;
+  DebugStr(3,'In Func: OpenBank_SW)');
+
+  If BankScreen then
+  begin
+    DebugStr(3,'Bank Already Open');
+    Result := True;
+    Exit;
+  end;
+  if ((BankPoint.x >= 0) and (BankPoint.y >= 0))
+    and MenuCheck(BankPoint,7,5,['est >', 'se Ban'],true) then
+  begin
+    DebugStr(2,'Remembered where the BankChest was, clicked bank succesfully');
+    Result := True;
+  end else
+  begin
+    BankPoint := FindBank_SW(True);
+    Result := (BankPoint.x >= 0) and (BankPoint.y >= 0);
+  end;
+end;
+
+function WithdrawTarget : Boolean;
+var
+  ItemDTM, StringDTM : Integer;
+  TP, BankSlot : TPoint;
+begin
+  Result := False;
+  DebugStr(3,'In Func: WithdrawTarget');
+  DebugStr(1,'Withdrawing');
+  if not BankScreen then
+  begin
+    DebugStr(3,'Not in bank screen, exiting withdraw');
+    Exit;
+  end;
+  case GetWoodType of
+    MAPLE :
+    begin
+      case GetFletchMode of
+        CUT_BOWS, CUT_AND_STRING_BOWS : ItemDTM := GetDTM(MAPLE_LOG);
+        STRING_BOWS :
+          if GetSize = SIZE_LONG then
+            ItemDTM := GetDTM(MAPLE_UL)
+          else
+            ItemDTM := GetDTM(Maple_US);
+      end;
+    end;
+  end;
+  SetDTMName(ItemDTM,'ItemDTM');
+
+  if not FindDTM(ItemDTM,TP.x,TP.y,MBX1,MBY1,MBX2,MBY2) then
+  begin
+    DebugStr(2,'Did not find your Logs/Unstrung bows in bank. You either ran' +
+               ' out, or did not have them at top of your bank.');
+    //Logout;
+    //NextPlayer(False);
+  end else
+  begin
+    DebugStr(2,'Found the bankslot');
+    BankSlot := MSTPointToBankPoint(TP);
+    DebugStr(5,'Val- BankSlot: ' + ToStr(BankSlot));
+    if GetFletchMode = CUT_BOWS then
+      Result := Withdraw(BankSlot.x,BankSlot.y,0)
+    else
+    begin
+      Result := Withdraw(BankSlot.x,BankSlot.y,14);
+    end;
+  end;
+  FreeDTM(ItemDTM);
+end;
+
+function Fletch_CUT : Boolean;
+var
+  LogDTM,InvSlot,I : Integer;
+  Slots : TIntegerArray;
+  TP : TPoint;
+  SlotBox : TBox;
+begin
+  Result := False;
+  DebugStr(3,'In Func: Fletch_CUT');
+
+  LogDTM := GetDTM(GetWoodType);
+  InvSlot := -1;
+  For InvSlot := 1 to 28 do
+  begin
+    DebugStr(5,'Status: Checking inv slot ' + IntToStr(InvSlot) + ' for logs');
+    SlotBox := InvBox(InvSlot);
+    if FindDTM(LogDTM,TP.x,TP.y,SlotBox.X1,SlotBox.Y1,SlotBox.X2,SlotBox.Y2) then
+    begin
+      DebugStr(5,'Status: Found logs at inv slot ' + IntToStr(InvSlot));
+      MouseItem(InvSlot,mouse_Left);
+      Result := True;
+      break;
+    end;
+  end;
+  FreeDTM(LogDTM);
+end;
+
+function FletchWindowOpen : Boolean;
+begin
+  Result := (GetColor(19,381) = 4543066);
+end;
+
+function HandleFletchOptions : Boolean;
+var
+  T : LongInt;
+  TextPoint : TPoint;
+begin
+  MarkTime(T);
+  repeat
+    wait(RandomRange(150,300));
+  until FletchWindowOpen or (TimeFromMark(T) > 5000);
+
+  MarkTime(T);
+  while FletchWindowOpen and (TimeFromMark(T) < 10000) do
+  begin
+    case CountColor(16777215,150,350,367,378) of
+      424: //'What do you want to use on the logs
+        begin
+          If not FindTextTPAEx(2070783,5,MCX1,MCY1,MCX2,MCY2,TextPoint.x,TextPoint.y,'nif',StatChars,ClickLeft) then//25,433,455,492) then
+          begin
+            DebugStr(2,'Did not find Fletch option');
+          end else
+            Break;
+        end;
+    end;
+  end;
+//  srl
+end;
+
+var d : Integer;
+begin
+  DebugLevel := Max(0,DEBUG_LEVEL);
+  {$IFDEF SMART}
+    Smart_Members := true;
+    Smart_Server := 100;
+    Smart_Signed := false;
+    Smart_SuperDetail := false;
+  {$ELSE}
+    //ActivateClient;
+  {$ENDIF}
+  SetupSRL;
+  DeclarePlayers;
+
+  HandleFletchOptions;
+end.
