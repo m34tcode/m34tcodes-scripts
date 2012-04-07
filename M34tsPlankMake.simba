@@ -1,0 +1,1203 @@
+{$DEFINE SMART}
+{$i srl/srl.simba}
+{$i ObjectDTM/ObjDTMInclude.simba}
+
+var
+
+  //Stores the previous bank slot logs were found in, to speed up banking
+  LogsBankSlot : TPoint;
+
+  //Proggy stuff, and fail counter, and bank method...
+  Prog_PlanksMade,FailCount : Integer;
+  BankWithChest : Boolean;
+
+  //stats stuff
+  commitTime : LongInt;
+  logsPlanked : Integer;
+
+  WarnTime : LongInt;
+
+const
+  DEBUG_LEVEL = 5;
+  ENABLE_WALKING = True; //If true, your character will walk to the
+                          // edgeville bank, if it cannot identify a bank nearby
+
+  MAX_FAILS = 3; //player will log out if the script fails this many times in a row
+                 //^ I recomend you do not change
+
+  SRLStats_Username = '';//If you do not have a stats account, please leave
+  SRLStats_Password = '';//these blank, and register an account when prompted
+
+
+  //Dont touch this line!!
+  IMAGE_PATH = ScriptPath + 'm34tLunarPlanker.bmp';
+
+
+
+procedure DeclarePlayers;
+begin
+  HowManyPlayers := 1;
+  NumberOfPlayers(HowManyPlayers);
+  CurrentPlayer := 0;
+  with Players[0] do
+  begin
+    Name := '';
+    Pass := '';
+    Pin := '';
+    Active := true;
+    Member := true
+                      //Log Type
+    Integers[0] := 2; //0-3 for normal, oak, teak, or mahogany logs respectively
+    Booleans[0] := True; //Use soulwars bankchest?
+  end;
+end;
+
+function replicate(str : String; count : Integer):String;
+var
+  I : Integer;
+begin
+  Result := '';//make sure result is empty if function was previously called;
+
+  for I := 0 to count-1 do
+    Result := Result + str;
+end;
+
+procedure DebugStr(Level : Integer; Text : String);
+begin
+  if (DEBUG_LEVEL >= Level) then
+    writeln(replicate(':: ',Level) + Text);
+end;
+
+//By Dgby714
+function DownloadToFile(const URL, Filename: string): boolean;
+var
+  FileI: LongInt;
+  FileC, FileH: string;
+begin
+  Result := False;
+
+  FileI := InitializeHTTPClient(False,False);
+  try
+    FileC := GetHTTPPage(FileI, URL);
+    FileH := GetRawHeaders(FileI);
+
+    if ((FileC = '') or (FileH = '')) then
+    begin
+      WriteLn('Error downloading "' + URL + '".');
+      Exit;
+    end;
+
+    FileH := Copy(GetRawHeaders(FileI), 10, Pos(#13, FileH) - 10);
+
+    if (FileH <> '200 OK') then
+    begin
+      WriteLn('Couldn''t download "' + URL + '", Error Code: ' + FileH + '.');
+      Exit;
+    end;
+
+  finally
+    FreeHTTPClient(FileI);
+  end;
+
+  try
+    if not FileExists(Filename) then
+      FileI := CreateFile(Filename)
+    else
+      FileI := OpenFile(Filename, False);
+
+    CloseFile(FileI);
+
+    FileI := RewriteFile(Filename, False);
+    Result := WriteFileString(FileI, FileC);
+  finally
+    CloseFile(FileI);
+  end;
+end;
+
+function GetLogDTM(Log : Integer):Integer;
+begin
+  case Log of
+    0: Result := DTMFromString('mlwAAAHicY2dgYNgFxBuB+CAQbwfik0B8AoiPAHEuEJdA' +
+                               'cTkQFwBxDhBnAnGAjTJDc6YlkMWEgVmBJC7MiAdDAQC3pgpZ');
+    1: Result := DTMFromString('mlwAAAHicY2dgYDjMzMCwE4gPAfFpJAzi6zEyMBgAsQIU' +
+                               'awCxIRCbAHFdvDnD7JowoAlMGJgVSOLCjHgwFAAAS4YJZQ==');
+    2: Result := DTMFromString('mlwAAAHicY2dgYOgF4jYg7gPi6UA8B4inAXEHEOcCcQkQ' +
+                               'lwFxMRDnA3EWEFcA8cSqAIbWZCsgiwkDswJJXJgRD4YCAEuxCcY=');
+    3: Result := DTMFromString('mlwAAAHicY2dgYDjDyMBwCIgPM0LYF4D4KhBfBmIVINYB' +
+                               'YkMg1gNiXShfGYhb870YAvS4gSYwYWBWIAnD6LKMeDAUA' +
+                               'AAftgjF');
+  end;
+end;
+
+function GetBankLogDTM(Log : Integer):Integer;
+begin
+  case Log of
+    0: Result := DTMFromString('mlwAAAHicY2dgYNgFxBuB+CAQbwfik0B8AoiPAHEuEJdA' +
+                               'cTkQFwBxDhBnAnGAjTJDc6YlkMWEgVmBJC7MiAdDAQC3pgpZ');
+    1: Result := DTMFromString('mlwAAAHicY2dgYHjNyMDwGIg/APE3IP4CxL+B+DMQzwPK' +
+                               'LwXiSUA8FYjnAPEiIF4GxFkB+gyLm2OALCYMzAEkQRgbY' +
+                               'MSDoQAAKDMNfw==');
+    2: Result := DTMFromString('mlwAAAHicY2dgYJjEyMDQDcTTgXgeEM8B4kVAPAPEB8ov' +
+                               'BakB4mlAPAeIFwDxMiBuzvdiaE+zAbKYMDAHkARhbIARD' +
+                               '4YCAN8eCwo=');
+    3: Result := DTMFromString('mlwAAAHicY2dgYHjNyMDwBIjfAvEXIP4KxN+A+D0QKwGx' +
+                               'BhCLA7ECEIsBsSYQawNxc74XQ5ABD9AEJgzMASRBGBtgx' +
+                               'IOhAACFyQl2');
+  end;
+end;
+
+function GetMageSortSettingBMP(Setting : Integer; Planking : boolean) : Integer;
+begin
+  case Setting of
+    0: Result := BitmapFromString(6, 5, 'meJwTUVARUVCRl5c/evOVeUQBkPSN' +
+              'TfeKSmZkYABy05dtA8oCuUBBOBfIAHIDErOADCAXqBJI+sZnAhGQD' +
+              'UQQBgAtghmf');
+    1: If Planking then
+         Result := BitmapFromString(6, 6, 'meJzTNzCwsbHJyspiZGDo6uoSFhYG' +
+                'MhwdHYFsICMhIREoIi8vP2ny5ITERKCIvoEBUGTJkiVAEaA4FxcXk' +
+                'BuRWQzUAmQDFQC5AYlZsQVVQDaEC5SNyi1PKW8CAFv6GSo=')
+       else
+         Result := BitmapFromString(7, 7, 'meJzTNzCwsbHJzs5mZGDo6uoWFhbO' +
+                'buwBsh0dHYFcICMxMREomFHZKi8vP2nyFCAXKKhvYAAUTClvWrJkC' +
+                'VAQKMXFxQUUSSppSCisBuoFcoHKIGqAIkAE5KKJABHQWCAXgoDciM' +
+                'xiIAIAby4rEw==');
+    2: Result := BitmapFromString(7, 7, 'meJxrnL2gYsKc0u6ZRR1T8psnZDf2' +
+              'AFF9MgNQhMG2GY4yKluDTRhB7Pi9DF0PQQjIsG0CagEJArmLroIQkAE' +
+              'WZGRggOltAiIgF2hsZk0HkAFHCYXVQGNTypsgCMiNyCwGIgAMgjOd');
+  end;
+end;
+
+function MenuOpen:Boolean;
+var
+  MenuBMP,a,b : Integer;
+begin
+  DebugStr(3,'Checking whether menu is open...');
+  MenuBMP := BitmapFromString(4, 3, 'meJxbtmzZnz9//oHBHzBgZmEBIiDD' +
+        'zMyMS1AIiADthRTJ');
+  result := FindBitmap(MenuBMP,a,b);
+  DebugStr(4,'Menu was open: ' + BoolToStr(Result));
+
+  FreeBitmap(MenuBMP);
+end;
+
+procedure mouseAway;
+var
+  TP:TPoint;
+begin
+  DebugStr(5,'Exiting Menu');
+
+  GetMousePos(TP.x,TP.y);
+
+  MMouse(TP.x-100-random(50),TP.y-150-random(100),5,5);
+
+  wait(540+random(500));
+end;
+
+function PinAndBankTest:Boolean;
+var
+  T,Limit : LongInt;
+
+begin
+  if not LoggedIn then
+    Exit;
+  Result := false;
+  DebugStr(3,'Waiting for bank and pin screens...');
+  Limit := RandomRange(13000,17000);
+  MarkTime(T);
+  repeat
+    wait(50+Random(150));
+  until BankScreen or PinScreen or (TimeFromMark(T) > Limit);
+  if PinScreen then
+  begin
+    DebugStr(2,'Entering pin...');
+    if Length(Players[CurrentPlayer].Pin) = 0 then
+    begin
+      DebugStr(2,'You did not set a pin, but we are in the pin screen... ' +
+               'Next player...');
+      Logout;
+      NextPlayer(False);
+      Exit;
+    end;
+    inpin(Players[CurrentPlayer].Pin);
+  end;
+  DebugStr(3,'Waiting for bank screen...');
+  MarkTime(T);
+  while not BankScreen and (TimeFromMark(T) < 5000) do
+    wait(50+random(50));
+
+  wait(RandomRange(600,1200));
+  Result := BankScreen;
+  if Result then
+  begin
+    DebugStr(2,'Bank opened succesfully');
+    FixBank;
+  end else
+    DebugStr(2,'Did not find Bank Screen');
+end;
+
+function Open_Bank:Boolean;
+var
+  I,TempCTS : Integer;
+  TempHM,TempSM : Extended;
+  TP : TPoint;
+  bankerTPA : TPointArray;
+  bankerATPA : T2DPointArray;
+begin
+  if not LoggedIn then
+    Exit;
+  Result := False;
+  TempCTS := GetColorToleranceSpeed;
+  if TempCTS = 2 then
+    GetColorspeed2Modifiers(TempHM,TempSM);
+  SetColorToleranceSpeed(2);
+  SetColorspeed2Modifiers(0.04,0.50);
+  if not (BankScreen or PinScreen) then
+  begin
+    DebugStr(3,'Not in Bank or Pin Screens');
+    DebugStr(3,'Trying OpenBankNPC;...');
+    Result := OpenBankNPC;
+    if Result then
+      DebugStr(3,'SRL OpenBankNPC succesfull')
+    else
+    begin
+      DebugStr(3,'SRL OpenBankNPC failed, finding bankers manually...');
+      FindColorsTolerance(bankerTPA,3612967,MSX1,MSY1,MSX2,MSY2,10);
+      bankerATPA := TPAtoATPA(bankerTPA,20);
+      SortATPASize(bankerATPA,True);
+      for I := 0 to length(bankerATPA)-1 do
+      begin
+        if BankScreen or PinScreen then
+          break; //in case we opened succesfully from a previous bank call...
+        if Length(bankerATPA[I]) < 100 then
+          break;
+        writeln(Length(bankerATPA[I]));
+        TP := MiddleTPA(bankerATPA[I]);
+        MMouse(TP.x,TP.y,4,4);
+        DebugStr(4,'Waiting for bankers uptext...');
+        if WaitUpTextMulti(['to B','Bank','anke'],1525+random(225)) then
+        begin
+          DebugStr(3,'Found Banker');
+          clickMouse2(mouse_Right);
+          if WaitOption('ank B',1500+random(225)) then
+          begin
+            DebugStr(4,'Found option to bank');
+            wait(100+random(125));
+            if ChooseOption('ank B') then
+            begin
+              DebugStr(4,'Clicked open bank succesfully');
+              FailCount := Max(0,FailCount-1);
+              Result := True;
+              wait(750+random(200));
+              while IsMoving do
+                wait(50+random(150));
+            end else if not FindNormalRandoms then
+            begin
+              DebugStr(3,'Failed find open bank option, incrememnting FailCount...');
+              Inc(FailCount);
+              DebugStr(3,'Failed ' + inttostr(FailCount) + ' times so far...');
+            end;
+            break;
+          end;
+        end;
+      end;
+    end;
+  end;
+  DebugStr(2,'Banking Success: ' + BoolToStr(Result));
+  BankWithChest := Result;
+  {$IFDEF SMART}
+    SMART_ClearCanvasArea(IntToBox(MSX1,MSY1,MSX2,MSY2));
+  {$ENDIF}
+end;
+
+procedure depositPlanks;
+begin
+  if not BankScreen then
+    exit;
+  DebugStr(3,'Depositing Planks...');
+  Deposit(3,28,True);
+end;
+
+function TestBankSlot(text : TStringArray ; BankPoint : TPoint; ExitMenu : Boolean):Boolean;
+var
+  T : LongInt;
+  Tries : LongInt;
+begin
+  Result := False;
+
+  if not BankScreen then
+    exit;
+
+  DebugStr(4,'RightClick testing bank slot ' + tostr(BankPoint));
+
+  MouseBankSlot(BankPointToBankIndex(BankPoint),mouse_move);
+
+  for Tries := 0 to 5 do
+  begin
+    DebugStr(4,'Attempting to test object in bank. Attempt #' + inttostr(Tries));
+
+    If MenuOpen then
+      mouseAway;
+
+    MouseBankSlot(BankPointToBankIndex(BankPoint),mouse_move);
+
+    wait(50+random(150));clickmouse2(mouse_Right);
+
+    MarkTime(T);
+
+    while not MenuOpen and (TimeFromMark(T) < 3000) do
+      wait(350+random(250));
+
+    DebugStr(5,'Checking Options list for: '+tostr(text));
+
+    if OptionsExist(text,false) then
+    begin
+      Result := true;
+
+      break;
+    end else if MenuOpen then
+      break;
+
+  end;
+
+  //If not result then we are not in the correct menu anyways...
+  if Result and ExitMenu and MenuOpen then
+    mouseAway;
+
+  DebugStr(4,'Done Testing Bank Slot ' + tostr(BankPoint) + '. Result: ' + booltostr(Result));
+end;
+
+function GetLogsUptext(Log : Integer) : TStringArray;
+begin
+  case Log of
+    0: Result := ['ll L'];
+    1: Result := ['ak l','Oak'];
+    2: Result := ['eak l','Teak'];
+    3: Result := ['aho','oga', 'any', 'ny lo'];
+  end;
+end;
+
+function FindLogs(var LogsSlot:TPoint; withdrawLogs:boolean):Boolean;
+var
+  found : Boolean;
+  LogDTM : Integer;
+  T : LongInt;
+  TP : TPoint;
+begin
+  if not LoggedIn then
+    Exit;
+  if not BankScreen then
+  begin
+    DebugStr(3,'Attempted to find logs, but we were not in the bank window');
+    CloseWindow; //In case we got stuck in deposit window...
+  end;
+  if MenuOpen then
+    mouseAway;
+  LogDTM := GetBankLogDTM(Players[CurrentPlayer].Integers[0]);
+  DebugStr(2,'Beginning search for logs...');
+  FindDTM(LogDTM,TP.x,TP.y,MSX1,MSY1,MSX2,MSY2);
+  {$IFDEF SMART}
+    SMART_DrawCircle(false,TP,5,False,clAqua);
+  {$ENDIF}
+  found := TestBankSlot(GetLogsUptext(Players[CurrentPlayer].Integers[0]),MSTPointToBankPoint(TP),false);
+  if found or (TP.x > 1) then
+  begin
+    wait(350+random(150));
+    LogsSlot := MSTPointToBankPoint(TP);
+    DebugStr(4,'Found your logs in bank at slot ' + ToStr(LogsSlot));
+    if withdrawLogs then
+    begin
+      Result := Withdraw(LogsSlot.x,LogsSlot.y,0);
+      debugStr(2,'Withdrawing Logs Success: ' + BoolToStr(Result));
+      if Result then
+        exit;
+    end;
+  end else if not FindNormalRandoms and LoggedIn then
+  begin
+    DebugStr(2,'Failed to withdraw logs!! You either ran out of your specified ' +
+             'log type, Or did not have your logs visible in the atop of your' +
+             ' bank.');
+    Logout;
+    NextPlayer(False);
+  end;
+  FreeDTM(LogDTM);
+  {$IFDEF SMART}
+    SMART_ClearCanvasArea(IntToBox(MSX1,MSY1,MSX2,MSY2));
+  {$ENDIF}
+end;
+
+function withdrawLogs:Boolean;
+var
+  found : boolean;
+begin
+  Result := false;
+  FixBank;
+  if not BankScreen then
+  begin
+    DebugStr(3,'Attempted to withdraw, but was not in bank screen...');
+    CloseWindow;
+    exit;
+  end;
+  found := TestBankSlot(GetLogsUptext(Players[CurrentPlayer].Integers[0]),LogsBankSlot,false);
+  if not found and MenuOpen then
+    mouseAway;
+
+  if found then
+  begin
+    DebugStr(3,'Remembered logs Bank Slot, withdrawing');
+    Result := Withdraw(LogsBankSlot.x,LogsBankSlot.y,0)
+  end else
+  begin
+    DebugStr(3,'Did not remember logs Bank Slot, finding and withdrawing');
+    Result := FindLogs(LogsBankSlot,true);
+  end;
+end;
+
+function SortSpells(planking:Boolean):Boolean;
+var
+  I,TempBMP : Integer;
+  T : LongInt;
+  TP : TPoint;
+begin
+  Result := False;
+
+  if not LoggedIn then
+    Exit;
+
+  if BankScreen then
+    CloseWindow;
+  wait(350+random(300));
+
+  DebugStr(2,'Sorting the spells in your spellbook');
+  gametab(tab_Magic);
+
+  MarkTime(T);
+  while not (GetCurrentTab = tab_Magic)
+    and (TimeFromMark(T) < (RandomRange(16000,20000))) do
+    wait(150+random(50));
+
+  if not (GetCurrentTab = tab_Magic) and not FindNormalRandoms and LoggedIn then
+  begin
+    DebugStr(2,'Failed to open magic tab for casting PlankMake');
+    Logout;
+    NextPlayer(False);
+  end;
+
+  for I := 0 to 2 do
+  begin
+    TempBMP := GetMageSortSettingBMP(I,planking);
+    if FindBitmapIn(TempBMP,TP.x,TP.y,MIX1,MIY1,MIX2,MIY2) then
+    begin
+      mouse(TP.x,TP.y,3,3,mouse_Left);
+      DebugStr(4,'Mage Sort Setting ' + IntToStr(I+1) + ' Switched');
+      Result := True;
+    end;
+    wait(150+random(75));
+    FreeBitmap(TempBMP);
+  end;
+end;
+
+function LogInSlot(LogDTM,InvSlot:Integer):Boolean;
+var
+  x,y : Integer;
+  box : TBox;
+begin
+  if not LoggedIn then
+    exit;
+  box := InvBox(InvSlot);
+  Result := FindDTM(LogDTM,x,y,box.X1,box.Y1,box.X2,box.Y2);
+end;
+
+function GetLogArray(LogDTM : Integer) : TBoolArray;
+var
+  I : Integer;
+  InvArr : TBoolArray;
+  DebugLine : String;
+begin
+  if not LoggedIn then
+    Exit;
+
+  SetArrayLength(InvArr,28);
+  DebugStr(3,'Finding which inventory slots contain logs..');
+  GameTab(tab_Inv);
+  wait(1000+random(100));
+  DebugStr(3,'');
+  DebugStr(3,'Logs Identified in inventory:');
+  for I := 0 to 27 do
+  begin
+    InvArr[I] := LogInSlot(LogDTM,I+1);
+    if I Mod 4 = 0 then
+    begin
+      if length(DebugLine) > 1 then
+        DebugStr(3,DebugLine + '|');
+
+      DebugLine := '|';
+    end;
+
+    if InvArr[I] then
+      DebugLine := DebugLine + 'L'
+    else
+      DebugLine := DebugLine + ' ';
+  end;
+
+  DebugStr(3,DebugLine + '|');
+
+  Result := InvArr;
+end;
+
+function ClickLog(LogSlot : Integer) : Boolean;
+var
+  T : LongInt;
+begin
+  if not LoggedIn then
+    exit;
+
+  DebugStr(5,'Clicking log at inventory slot ' + ToStr(LogSlot));
+
+  MarkTime(T);
+
+  while not (GetCurrentTab = tab_Inv) and (TimeFromMark(T) < 4000) do
+    wait(150+random(50));
+
+  MouseItem(LogSlot,mouse_Left);
+
+  MarkTime(T);
+  if (length(Players[CurrentPlayer].Pin) > 0) then
+  begin
+    while not (PinScreen or (GetCurrentTab = tab_Magic)) or (TimeFromMark(T) > 5000+random(1000)) do
+      wait(150+random(150));
+
+    if PinScreen then
+      InPin(Players[CurrentPlayer].Pin);
+  end;
+
+  MarkTime(T);
+  while  (GetCurrentTab = tab_Inv) and (TimeFromMark(T) < 4000) do
+    wait(150+random(50));
+
+  Result := GetCurrentTab = tab_Magic;
+end;
+
+function ReadyPlankSpell:Boolean;
+var
+  PlankMakeDTM : Integer;
+  T : LongInt;
+  TP : TPoint;
+begin
+  Result := False;
+
+  if not LoggedIn then
+    Exit;
+
+  PlankMakeDTM := DTMFromString('mggAAAHicY2NgYPjEBMGvgPglEP8C4i9AXMDIwFANxKVAnAfEuUCcAcRHpicCdTFiYFYgiQ1jqoRgCAAAGecKRg==');
+  DebugStr(5,'Selecting the PlankMake spell...');
+
+  MarkTime(T);
+  while not (GetCurrentTab = tab_Magic) and (TimeFromMark(T) < 4000) do
+    wait(150+random(300));
+
+  if not (GetCurrentTab = tab_Magic) then
+    begin
+      DebugStr(2,'Not in magic tab, possible random?');
+
+      If FindNormalRandoms then
+        DebugStr(2,'Found randoms')
+      else
+        DebugStr(3,'Did not find randoms');
+
+      GameTab(tab_Magic);
+    end;
+
+  if not FindDTM(PlankMakeDTM,TP.x,TP.y,MIX1,MIY1,MIX2,MIY2) then
+  begin
+    DebugStr(2,'Failed to find PlankMake spell, attempting to resort spell tab...');
+
+    SortSpells(true);
+
+    if not FindDTM(PlankMakeDTM,TP.x,TP.y,MIx1,MIY1,MIX2,MIY2)
+      and not FindNormalRandoms
+      and LoggedIn then
+    begin
+      DebugStr(3,'Failed find plankmake spell. Either you did not start ' +
+                 'with runes in your inventory, or you ran out of runes.');
+
+      Logout;
+      NextPlayer(False);
+      exit;
+    end else
+      FailCount := Max(0,FailCount-1);
+
+  end;
+
+  mouse(TP.x,TP.y,3,3,mouse_Left);
+  FreeDTM(PlankMakeDTM);
+
+  Result := True;
+end;
+
+procedure antiban;
+begin
+  DebugStr(3,'Searching for randoms...');
+
+  FindNormalRandoms;
+
+  if FindMod then
+  begin
+    DebugStr(1,'Found a mod! Logging out to grab a drink and calm down...');
+
+    logout;
+
+    wait(20000+random(5000)); //Make it seem like we had to walk away...
+
+    SelectWorld(RandomWorld(true,false));
+    LogInPlayer;
+  end;
+
+  DebugStr(4,'Might do antiban...');
+
+  case random(750) of //TODO maybe raise it?
+    1..5:     begin
+                DebugStr(3,'Performing PickUpMouse...');
+                PickUpMouse;
+              end;
+
+    6..30:    begin
+                DebugStr(3,'Performing RandomRClick...');
+                RandomRClick;
+              end;
+
+    31..175:  begin
+                DebugStr(3,'Performing HoverSkill...');
+                HoverSkill(SKILL_MAGIC,false);
+              end;
+
+    175..350: begin
+                DebugStr(3,'Performing SetScreenMouse...');
+                SetScreenMouse('rand',SRL_ANGLE_HIGH);
+              end;
+
+  end;
+end;
+
+function hasLogs(var logArr : TBoolArray):Boolean;
+var
+  TempDTM,I : Integer;
+begin
+  Result := False;
+
+  if not LoggedIn then
+    exit;
+
+  TempDTM := GetLogDTM(Players[CurrentPlayer].Integers[0]);
+
+  LogArr := GetLogArray(TempDTM);
+
+  for I := 0 to 27 do
+    if LogArr[I] then
+      Result := true;
+
+  DebugStr(3,'Inventory contains logs: ' + BoolToStr(Result));
+
+  FreeDTM(TempDTM);
+end;
+
+function CheckOutOfMoney : boolean;
+begin
+  SetChat('All',CHAT_GAME);
+  Result := FindBlackChatMessage('og into pl');
+
+  if Result then
+  begin
+    DebugStr(1,'You Have run out of money!');
+
+    Logout;
+    NextPlayer(False);
+  end;
+end;
+
+function PlankLog(Log : Integer) : Boolean;
+begin
+  Result := False;
+  if ReadyPlankSpell then
+    if ClickLog(Log) then
+    begin
+      Result := True;
+      logsPlanked := logsPlanked + 1;
+      Prog_PlanksMade := Prog_PlanksMade + 1;
+    end;
+
+  if CheckOutOfMoney then
+    Result := False;
+end;
+
+function removeFromIntArray(arr : TIntegerArray; toDelete : Integer) : TIntegerArray;
+var
+  newArr: TIntegerArray;
+  i:Integer;
+  found : Boolean;
+begin
+  SetArrayLength(newArr,length(arr)-1);
+  for i := 0 to length(newarr)-1 do
+  begin
+    if not found then
+      found := i = toDelete;
+    if (found) then
+      newArr[i] := arr[i+1]
+    else
+      newArr[i] := arr[i];
+  end;
+  result := newArr;
+end;
+
+function InvToInvPoint(I : Integer) : TPoint;
+begin
+  Result.x := ((I-1) mod 4)+1;
+  Result.y := ((I-1) div 4)+1;
+end;
+
+function InvPointToIndex(Point : TPoint) : Integer;
+begin
+  result := (Point.x)+Max(0,(Point.y-1)*4);
+end;
+
+function randNearInvSlot(Slot : Integer; slotArr : TIntegerArray) : Integer;
+var
+  x,y,SlotCount,i : Integer;
+  actualSlots : TIntegerArray;
+  tempPoint,SlotPoint : TPoint;
+begin
+  SetArrayLength(actualSlots,8);
+  SlotPoint := InvToInvPoint(Slot);
+  writeln(SlotPoint);
+  for x := -1 to 1 do
+    for y := -1 to 1 do
+    begin
+      if (x = 0) and (y = 0) then
+        Continue;
+      TempPoint.x := SlotPoint.x+x;
+      TempPoint.y := SlotPoint.y+y;
+      if (TempPoint.x < 1) or (TempPoint.x > 4) then
+        continue;
+      if (TempPoint.y < 1) or (TempPoint.y > 7) then
+        continue;
+
+      writeln(tempPoint);
+      writeln(slotArr);
+      writeln(InvPointToIndex(TempPoint));
+      if InIntArray(slotArr,InvPointToIndex(TempPoint)) then
+      begin
+        actualSlots[slotCount] := InvPointToIndex(TempPoint);
+        Inc(SlotCount);
+      end;
+    end;
+  SetArrayLength(actualSlots,SlotCount);
+
+  {$IFDEF SMART}
+    for I := 0 to SlotCount-1 do
+    begin
+      SMART_DrawBoxex(false,InvBox(actualSlots[I]),clYellow);
+    end;
+  {$ENDIF}
+  writeln('-----');
+  writeln(actualSlots);
+  writeln(SlotCount);
+  if SlotCount > 0 then
+    result := actualSlots[random(SlotCount)]
+  else
+    result := slotArr[random(Length(slotArr))];
+end;
+
+function logArrToIntArray(LogArr : TBoolArray) : TIntegerArray;
+var
+  I,currLength : Integer;
+  intArr : TIntegerArray;
+begin
+  setlength(intArr,Length(LogArr));
+  for I := 0 to length(LogArr)-1 do
+  begin
+    if LogArr[I] then
+    begin
+      intArr[currLength] := I+1;
+      Inc(currLength);
+    end;
+  end;
+  SetLength(intArr,currLength);
+  Result := intArr;
+end;
+
+function makePlanks : Boolean;
+var
+  currIndex : Integer;
+  logArr : TBoolArray;
+  InvSlots : TIntegerArray;
+begin
+  Result := False;
+  if not LoggedIn then
+    exit;
+  if BankScreen or PinScreen then
+    exit;
+  DebugStr(3,'Getting logs in inventory...');
+  if hasLogs(LogArr) then
+  begin
+    InvSlots := logArrToIntArray(LogArr);
+    gametab(tab_Magic);
+
+    while Length(InvSlots) > 0 do
+    begin
+      currIndex := random(Length(InvSlots));
+      DebugStr(5,'Planking log at slot ' + IntToStr(InvSlots[currIndex]));
+      if not PlankLog(InvSlots[currIndex]) then
+        exit;
+      InvSlots := removeFromIntArray(InvSlots,currIndex);
+    end;
+  end;
+
+
+  {if hasLogs(LogArr) then
+  begin
+    Inc(Reps);
+    GameTab(tab_Magic);
+    writeln(':99999:' + tostr(InvSlots));
+    while length(InvSlots) > 0 do
+    begin
+      writeln('::' + tostr(InvSlots));
+      SMART_DrawBoxEx(true,InvBox(currSlot),clBlue);
+      currSlot := randNearInvSlot(currSlot,InvSlots);
+      if not PlankLog(currSlot) then
+        exit;
+      if CheckOutOfMoney then
+        exit;
+        writeln('deleting: ' + inttostr(currslot));
+        writeln(InvSlots);
+      InvSlots := removeFromIntArray(InvSlots,CurrSlot-1);
+        writeln(InvSlots);
+    end; {}
+
+end;
+
+function Bank : Boolean;
+begin
+writeln('00000000000000000000000');
+  Result := False;
+ // ClickNorth(SRL_ANGLE_HIGH); testing disabled
+  if not LoggedIn then
+    Exit;
+  SetAngle(SRL_ANGLE_HIGH);
+  DebugStr(2,'Searching for bank, Chest First: ' + BoolToStr(BankWithChest));
+  if BankWithChest then
+  begin
+    if not OpenBankChestEdge(SRL_bank_sw) then
+    begin
+      BankWithChest := False;
+      DebugStr(3,'Failed to find chest');
+      if not Open_Bank then
+      begin
+        BankWithChest := True;
+        DebugStr(3,'Failed to find chest');
+        exit;
+      end;
+    end;
+  end else
+  begin
+    if not OpenBankChestEdge(SRL_BANK_SW) then
+    begin
+    BankWithChest := True;
+      DebugStr(3,'Failed to find bank chest');
+      if not Open_Bank then
+      begin
+        BankWithChest := False;
+        DebugStr(3,'Failed to find npcs');
+        exit;
+      end;
+    end;
+  end;
+writeln('XXXXXXXXXXXXXXXXXXXXXXX');
+  DebugStr(3,'Done searching for banks');
+  wait(350+random(200));
+  while IsMoving do
+    wait(50+random(350));
+  PinAndBankTest;
+  depositPlanks;
+  if withdrawLogs then
+    Result := true;
+  CloseBank;
+  //CloseWindow;
+writeln('00000000000000000000000');
+end;
+
+function findLodeSymbol : boolean;
+var
+  LodeBMP : Integer;
+  TP : TPoint;
+  acc : Extended;
+begin
+  LodeBMP := BitmapFromString(9, 8, 'meJxbVJs7KSivxDIYgoDsRbW5QHRl' +
+        'XtP0Cb2///wGijja2QFJCHtPZxNc5cPHD4GCQBJiApCEGwUUhyCgX' +
+        'jSp3VvXvzx/AEjCzYFIAQWBJMQuCBtiF0QWKA5BcC1AF0LcA7cdwg' +
+        'aKAxEAIBhsCQ==');
+
+
+  FindDeformedBitmapToleranceIn(LodeBMP,TP.x,TP.y,MMX1,MMY1,MMX2,MMY2,6,0,true,acc);
+
+  DebugStr(4,'Found lodestone symbol with an accuracy of ' + tostr(acc));
+
+  Result := acc > 0.27; //0.277777... was lowest i got by dropping stuff around the
+                        // portal on symbol, in case someone tries to make
+                        // the bot fail...
+
+  FreeBitmap(LodeBMP);
+end;
+
+function InSoulWars : Boolean;
+begin
+  SetColorToleranceSpeed(0);
+  if FindNormalRandoms then //this will detect in soulwars if in heavily
+    Result := False          //wooded random areas, like the pheasant one
+  else
+    Result := CountColorTolerance(1596969,MMX1,MMY1,MMX2,MMY2,10)
+              +CountColorTolerance(2607331,MMX1,MMY1,MMX2,MMY2,22) > 2000;
+end;
+
+function NearBank(Walk : Boolean) : Boolean;
+var
+  EdgeBankDTM : String;
+  EdgeBackupBankDTM,I : Integer;
+  TP : TPoint;
+  a : Extended;
+begin
+  SymbolAccuracy := 0.22;
+  Result := False;
+
+  if not LoggedIn then
+    Exit;
+
+  EdgeBankDTM := '80:79:3:1:7:117:75:1:7:89:44:3:7:123:91';
+  EdgeBackupBankDTM := DTMFromString('mbQAAAHicY2WAAHYgVoFiEFsfKq4IxKpAzArE/36' +
+                                 'wMKhEiIFxjCEPGOswMjCIMKBioBADExoGAwBZgAWs');
+  //SWBankDTM :=
+  DebugStr(3,'Searching for bank...');
+  If not ObjDTM_Find(EdgeBankDTM,TP.x, TP.y, true) then
+  begin
+    DebugStr(3,'Failed to find bank on minimap... trying symbols...');
+    if not FindSymbol(TP.x,TP.y,'bank') then
+      if not FindDTMRotatedAlternating(EdgeBackupBankDTM,TP.x,TP.y,
+               MSX1,MSY1,MSX2,MSY2,Radians(-5),Radians(5),Radians(1),a) then
+        if not FindNormalRandoms then
+          exit;
+  end;
+  Result := (Walk and (Distance(TP.x,TP.y,MMCX,MMCY) <= 72))
+              or (Distance(TP.x,TP.y,MMCX,MMCY) <= 16);
+  if Walk then
+    Mouse(TP.x,TP.y,3,3,mouse_Left);
+
+  FreeDTM(EdgeBackupBankDTM);
+
+  wait(RandomRange(350,500));
+  while IsMoving do
+    wait(RandomRange(50,300));
+end;
+
+function WalkLodeToBank : Boolean;
+var
+  clicks : Integer;
+begin
+  Result := false;
+
+  if not LoggedIn then
+    Exit;
+
+  DebugStr(3,'Walking to bank...');
+  while (clicks < 8) and not Result do
+  begin
+    inc(clicks);
+    DebugStr(4,'Radial walking once...');
+    RadialWalkTolerance(5197908,112,85,53,-1,0,50);
+    FFlag(25);
+
+    Result := NearBank(True);
+  end;
+end;
+
+function TravelBank : Boolean;
+var
+  T : Longint;
+  HomePort : TPoint;
+begin
+  Result := False;
+  if not LoggedIn then
+    Exit;
+
+  ClickNorth(SRL_ANGLE_HIGH);
+
+  HomePort := Point(571,229);
+
+  GameTab(tab_Magic);
+
+  MarkTime(T);
+
+  while not (GetCurrentTab = tab_Magic)
+    and (TimeFromMark(T) < RandomRange(5000,6000)) do
+    wait(RandomRange(150,450));
+
+  if not (GetCurrentTab = tab_Magic) then
+    DebugStr(2,'Failed to open magic tab... Attempting to switch again and resort your spell book');
+
+  SortSpells(false);
+
+  Mouse(HomePort.x,HomePort.y,4,4,mouse_right);
+
+  while not MenuOpen and (TimeFromMark(T) < RandomRange(5000,6000)) do
+    wait(RandomRange(300,500));
+
+  wait(RandomRange(350,550));
+
+  if not ChooseOption('ele') then
+  begin
+    DebugStr(2,'Failed to cast home port');
+    exit;
+  end;
+
+
+  MarkTime(T);
+
+  while not LodestoneScreen and (timefrommark(T) < RandomRange(5000,6000)) do
+    wait(RandomRange(160,1000));
+
+  if not LodestoneTeleport('edgeville') then
+  begin
+    clickmouse2(mouse_Right);
+
+    MarkTime(T);
+    while not MenuOpen and (TimeFromMark(T) < RandomRange(6000,7000)) do
+      wait(RandomRange(150,300));
+
+    wait(350+random(150));
+
+    if not ChooseOption('ele') then
+    begin
+      DebugStr(3,'Failed to right click teleport from lodeStone screen');
+      exit;
+    end;
+  end;
+
+  while not FindLodeSymbol and (TimeFromMark(T) < 20000) do
+    wait(RandomRange(300,600));
+
+  wait(RandomRange(5500,6500));
+
+  WalkLodeToBank;
+end;
+
+
+
+{$IFDEF SMART}
+  procedure PaintProggy;
+  var
+    TPA : TPointArray;
+    BMP,w,h,tw,th,I,II : Integer;
+    DebugLines : TStringArray;
+  begin
+    DebugStr(2,'Painting Proggy');
+
+    if not FileExists(IMAGE_PATH) then
+      DownloadToFile('http://bradsblog.co.uk/wp-content' +
+                     '/uploads/2012/04/Untitled.bmp',IMAGE_PATH);
+    BMP := LoadBitmap(IMAGE_PATH);
+    GetBitmapSize(BMP,w,h);
+    SetArrayLength(DebugLines,5);
+    TPA := TPAFromBox(MCBox);
+    DebugLines[0] := 'M34t''s Lunar Planker';
+    DebugLines[1] := 'Planks made: ' + IntToStr(Prog_PlanksMade);
+    DebugLines[2] := 'Xp Gained: ' + IntToStr(Prog_PlanksMade*90);
+    DebugLines[3] := 'Time Running: '
+                       + MsToTime(Integer(GetTimeRunning),Time_Formal);
+    DebugLines[2] := 'Planks per hour: ' + IntToStr(Prog_PlanksMade/((GetTimeRunning/1000/60/60)+1));
+
+    {for x := 0 to w-1 do
+      for y := 0 to h-1 do
+        FastSetPixel(BMP,x,y,10337999); }
+
+    for I := 0 to length(DebugLines)-1 do
+    begin
+      TPA := TPAFromText(DebugLines[I],'LoginChars',tw,th);
+      for II := 0 to length(TPA)-1 do
+        FastSetPixel(BMP,Min(w-1,TPA[II].x+10),Min(h-1,TPA[II].y+(22*I)+10),1);
+    end;
+
+    SMART_DrawBitmap(True,BMP,Point(MCX1,MCY1));
+    FreeBitmap(BMP);
+  end;
+{$ENDIF}
+
+procedure commitStats;
+begin
+  DebugStr(2,'Commiting stats...');
+  if stats_Commit then
+  begin
+    markTime(CommitTime);
+    DebugStr(2,'Committed stats succesfully');
+    DebugStr(3,'Mahogany Planks made since last commit: '+IntToStr(logsPlanked));
+    DebugStr(3,'Magic XP Gained since last commit: About ' + IntToStr(logsPlanked));
+
+    stats_IncVariable('Mahogany Planks Made',logsPlanked);
+    stats_IncVariable('Plank Makes Casted',logsPlanked);
+    stats_IncVariable('Magic EXP (Gained)',logsPlanked*90);
+  end;
+end;
+
+procedure ScriptTerminated;
+begin
+  DebugStr(2,'Attempting to commit stats one last time...');
+  commitStats;
+
+  SRLRandomsReport;
+
+  DebugStr(1,'Script Ended At ' + TheTime);
+  DebugStr(1,'Ran for ' + MsToTime(Integer(GetTimeRunning),Time_Formal));
+
+end;
+
+begin
+  AddOnTerminate('ScriptTerminated');
+  {$ifdef SMART}
+    Smart_Members := True;
+    Smart_Server := 100;
+    Smart_Signed := False;
+    Smart_SuperDetail := False;
+  {$endif}
+  DeclarePlayers;
+  SetupSRL;
+  ObjDTM_Setup;
+
+  SetupSRLStats(945, SRLStats_Username, SRLStats_Password);
+
+  repeat
+    if not LoggedIn then
+    begin
+      LogInPlayer;
+      wait(2000+random(4000));
+      ExitSquealOfFortune;
+    end;
+    {$IFDEF SMART}
+      PaintProggy;
+    {$ENDIF}
+    makePlanks;
+    If not Bank then
+    begin
+      DebugStr(2,'Failed to bank, making sure we are at the bank');
+      if not NearBank(true) and ENABLE_WALKING and not FindNormalRandoms then
+        TravelBank;
+    end;
+    antiban;
+    if TimeFromMark(commitTime) > 6 * 60 * 1000 then
+      commitStats;
+    if (FailCount >= MAX_FAILS) then
+    begin
+      DebugStr(1,'Failed too many times... Swiching players');
+      Logout;
+      NextPlayer(False);
+    end;
+  until AllPlayersInactive;
+
+  if LoggedIn then
+    Logout;
+end.
