@@ -1,4 +1,4 @@
-{$DEFINE SMART}
+//{$DEFINE SMART}
 {$i srl/srl.simba}
 {$i ObjectDTM\ObjDTMInclude.simba}
 
@@ -8,8 +8,8 @@ const
 (*  0: Mandatory Info                          *)
 (*  1: Basic Output(User Info)                 *)
 (*  2: Extended Output(User Info)              *)
-(*  3: Basic Flow(functions)                   *)
-(*  4: Extended Flow(loops, if statements, etc *)
+(*  3: Mechanics                               *)
+(*  4: Flow(Functions,loops,if statements, etc *)
 (*  5: Variable Values                         *)
 (***********************************************)
   DEBUG_LEVEL = 5;
@@ -50,9 +50,10 @@ const
   STRING_BOWS = 25;
   CUT_AND_STRING_BOWS = 26;
 //Bow Types
-  SIZE_LONG = 27;
-  SIZE_SHORT = 28;
-
+  TYPE_LONG = 27;
+  TYPE_SHORT = 28;
+  TYPE_SHAFT = 29;
+  TYPE_STOCK = 30;
 var
   DebugLevel : Integer;
   BankPoint : TPoint;
@@ -72,7 +73,7 @@ begin
 
     Integers[0] := MAPLE; //Log type: NORMAL,OAK,WILLOW,MAPLE,etc
     Integers[1] := STRING_BOWS; //Action: CUT_BOWS,STRING_BOWS,CUT_AND_STRING_BOWS
-    Integers[2] := SIZE_LONG; //for making longbow, SIZE_LONG, else SIZE_SHORT
+    Integers[2] := TYPE_SHAFT; //for making longbow, SIZE_LONG, else SIZE_SHORT
   end;
 end;
 
@@ -101,7 +102,7 @@ begin
   Result := Players[CurrentPlayer].Integers[0];
 end;
 
-function GetSize : Integer;
+function GetType : Integer;
 begin
   Result := Players[CurrentPlayer].Integers[2];
 end;
@@ -120,7 +121,7 @@ begin
   else
     begin
       ShowMessage('You passed an invalid parameter to ''GetDTM''');
-      DebugStr(1,'Invalid Parameter in ''GetDTM''');
+      DebugStr(1,'Invalid Parameter in ''GetDTM'': ' + IntToStr(TargetObject));
       TerminateScript;
     end;
   end;
@@ -374,12 +375,18 @@ begin
     MAPLE :
     begin
       case GetFletchMode of
-        CUT_BOWS, CUT_AND_STRING_BOWS : ItemDTM := GetDTM(MAPLE_LOG);
+        CUT_BOWS, CUT_AND_STRING_BOWS : ItemDTM := GetDTM(MAPLE);
         STRING_BOWS :
-          if GetSize = SIZE_LONG then
+          if GetType = TYPE_LONG then
             ItemDTM := GetDTM(MAPLE_UL)
+          else if GetType = TYPE_LONG then
+            ItemDTM := GetDTM(Maple_US)
           else
-            ItemDTM := GetDTM(Maple_US);
+          begin
+            DebugStr(0,'Error: You entered an invalid bow type.');
+            Logout;
+            NextPlayer(False);
+          end;
       end;
     end;
   end;
@@ -406,7 +413,7 @@ begin
   FreeDTM(ItemDTM);
 end;
 
-function Fletch_CUT : Boolean;
+function ClickLog : Boolean;
 var
   LogDTM,InvSlot,I : Integer;
   Slots : TIntegerArray;
@@ -414,7 +421,7 @@ var
   SlotBox : TBox;
 begin
   Result := False;
-  DebugStr(3,'In Func: Fletch_CUT');
+  DebugStr(3,'In Func: ClickLog');
 
   LogDTM := GetDTM(GetWoodType);
   InvSlot := -1;
@@ -438,31 +445,64 @@ begin
   Result := (GetColor(19,381) = 4543066);
 end;
 
-function HandleFletchOptions : Boolean;
+function HandleChat_FletchTypes : Boolean;
+var
+  T : LongInt;
+  Text : string;
+  TextPoint : TPoint;
+begin
+  Result := False;
+  MarkTime(T);
+  while FletchWindowOpen and (TimeFromMark(T) < 10000) do
+  begin
+    case GetType of
+      TYPE_LONG: Text := 'ong';
+      TYPE_SHORT: Text := 'ort';
+      TYPE_STOCK: Text := 'ock';
+      TYPE_SHAFT: Text := 'aft';
+    end;
+    if FindTextTPAEx(2070783,5,MCX1,MCY1,MCX2,MCY2,TextPoint.x,TextPoint.y,'ong',StatChars,ClickLeft) then//25,433,455,492) then
+    begin
+      DebugStr(3,'Found Fletch Option');
+      Result := True;
+      Break;
+    end else
+      DebugStr(3,'Did not find Fletch option');
+  end;
+end;
+
+function HandleChat_Tool : Boolean;
 var
   T : LongInt;
   TextPoint : TPoint;
 begin
-  MarkTime(T);
-  repeat
-    wait(RandomRange(150,300));
-  until FletchWindowOpen or (TimeFromMark(T) > 5000);
-
+  Result := False;
   MarkTime(T);
   while FletchWindowOpen and (TimeFromMark(T) < 10000) do
   begin
-    case CountColor(16777215,150,350,367,378) of
-      424: //'What do you want to use on the logs
-        begin
-          If not FindTextTPAEx(2070783,5,MCX1,MCY1,MCX2,MCY2,TextPoint.x,TextPoint.y,'nif',StatChars,ClickLeft) then//25,433,455,492) then
-          begin
-            DebugStr(2,'Did not find Fletch option');
-          end else
-            Break;
-        end;
+    if FindTextTPAEx(2070783,5,MCX1,MCY1,MCX2,MCY2,TextPoint.x,TextPoint.y,'nife',StatChars,ClickLeft) then//25,433,455,492) then
+    begin
+      DebugStr(3,'Found Fletch Tool Option');
+      Result := True;
+      Break;
+    end else
+      DebugStr(3,'Did not find Fletch Tool option');
+  end;
+end;
+
+function HandleChat : Boolean;
+var
+  T : LongInt;
+begin
+  Result := False;
+  MarkTime(T);
+  while not Result and (TimeFromMark(T) < 10000) do
+  begin
+    case CountColor(16777215,155,358,249,366) of
+      193 : HandleChat_Tool;
+      80: Result := HandleChat_FletchTypes;
     end;
   end;
-//  srl
 end;
 
 var d : Integer;
@@ -479,5 +519,7 @@ begin
   SetupSRL;
   DeclarePlayers;
 
-  HandleFletchOptions;
+  WithdrawTarget;
+  ClickLog;
+  HandleChat
 end.
